@@ -1,57 +1,50 @@
-// api/index.js
 
 export const config = {
-  runtime: 'edge', // Используем Edge для скорости и длинных таймаутов
+  runtime: 'edge',
 };
 
 export default async function handler(req) {
-  // 1. CORS заголовки (чтобы Janitor не ругался)
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With',
   };
 
-  // Обработка preflight запроса
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 200, headers: corsHeaders });
   }
 
   try {
-    // 2. Получаем API ключ из заголовка Authorization
     const authHeader = req.headers.get('Authorization');
     const apiKey = authHeader ? authHeader.replace('Bearer ', '').trim() : null;
 
     if (!apiKey) {
-      return new Response(JSON.stringify({ error: "No API Key provided" }), {
-        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      return new Response(JSON.stringify({ error: "No API Key" }), { 
+        status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       });
     }
 
-    // Если это просто проверка связи (GET)
     if (req.method === 'GET') {
       return new Response(JSON.stringify({
         object: "list",
-        data: [{ id: "gemini-1.5-flash", object: "model" }, { id: "gemini-1.5-pro", object: "model" }]
+        data: [
+            { id: "gemini-1.5-flash-latest", object: "model" }, 
+            { id: "gemini-1.5-pro-latest", object: "model" }
+        ]
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // 3. Разбираем запрос от Janitor
     const body = await req.json();
     const messages = body.messages || [];
 
-    // --- ЛОГИКА АДАПТАЦИИ СООБЩЕНИЙ ---
     let contents = [];
     let systemInstruction = null;
 
     for (const msg of messages) {
       if (msg.role === 'system') {
-        // Системный промпт
         systemInstruction = { parts: [{ text: msg.content }] };
       } else {
         const role = msg.role === 'assistant' ? 'model' : 'user';
-        // Gemini ненавидит, когда сообщения с одной ролью идут подряд.
-        // Если предыдущее сообщение от того же автора -> склеиваем их.
         if (contents.length > 0 && contents[contents.length - 1].role === role) {
           contents[contents.length - 1].parts[0].text += "\n\n" + msg.content;
         } else {
@@ -60,18 +53,21 @@ export default async function handler(req) {
       }
     }
 
-    // Gemini требует, чтобы диалог заканчивался на User. Если вдруг Model -> добавляем заглушку.
     if (contents.length > 0 && contents[contents.length - 1].role === 'model') {
-      contents.push({ role: 'user', parts: [{ text: "(Continue generating)" }] });
+      contents.push({ role: 'user', parts: [{ text: "(Continue)" }] });
     }
 
-    // Выбор модели (по дефолту flash, если попросили pro - даем pro)
-    let model = "gemini-1.5-flash";
-    if (body.model && body.model.includes("pro")) model = "gemini-1.5-pro";
+    // --- ИСПРАВЛЕНИЕ: Используем точные названия версий ---
+    // По умолчанию используем Flash Latest (самая стабильная версия)
+    let targetModel = "gemini-3-pro-preview";
+    
+    // Если пользователь или Janitor просит "pro", переключаем на Pro Latest
+    if (body.model && body.model.toLowerCase().includes("pro")) {
+        targetModel = "gemini-3-pro-preview";
+    }
 
-    const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
 
-    // 4. Отправляем запрос в Google
     const googleRes = await fetch(googleUrl, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -93,34 +89,29 @@ export default async function handler(req) {
 
     if (!googleRes.ok) {
       const errorText = await googleRes.text();
-      return new Response(JSON.stringify({ error: `Google Error: ${errorText}` }), {
-        status: googleRes.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      return new Response(JSON.stringify({ error: `Google Error: ${errorText}` }), { 
+        status: googleRes.status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
       });
     }
 
     const data = await googleRes.json();
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-    // 5. Отдаем ответ в формате OpenAI
-    const responseBody = {
+    return new Response(JSON.stringify({
       id: "chatcmpl-" + Date.now(),
       object: "chat.completion",
       created: Math.floor(Date.now() / 1000),
-      model: model,
+      model: targetModel,
       choices: [{
         index: 0,
         message: { role: "assistant", content: text },
         finish_reason: "stop"
       }]
-    };
-
-    return new Response(JSON.stringify(responseBody), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
   } catch (error) {
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    return new Response(JSON.stringify({ error: error.message }), { 
+      status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } 
     });
   }
 }
