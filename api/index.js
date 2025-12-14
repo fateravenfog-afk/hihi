@@ -59,11 +59,11 @@ export default async function handler(req) {
 
     // --- ИСПРАВЛЕНИЕ: Используем точные названия версий ---
     // По умолчанию используем Flash Latest (самая стабильная версия)
-    let targetModel = "gemini-3-pro-preview";
+    let targetModel = "gemini-1.5-flash-latest";
     
     // Если пользователь или Janitor просит "pro", переключаем на Pro Latest
     if (body.model && body.model.toLowerCase().includes("pro")) {
-        targetModel = "gemini-3-pro-preview";
+        targetModel = "gemini-1.5-flash-latest";
     }
 
     const googleUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
@@ -115,3 +115,4 @@ export default async function handler(req) {
     });
   }
 }
+
